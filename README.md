@@ -26,6 +26,8 @@ Completa `.env.local` con la configuración de tu propio proyecto Firebase y con
 npm run dev
 ```
 
+También puedes usar **Explorar como invitado** sin configurar Firebase. La demo usa registros ficticios y los cambios se mantienen solo en memoria durante esa sesión.
+
 Los valores de `.env.local` son locales y no deben subirse al repositorio. Para compilar y revisar el código:
 
 ```bash

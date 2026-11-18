@@ -19,15 +19,80 @@ import {
   Shield, CheckCircle2, Clock, Download, Key, MessageSquare,
   FileText, LogOut, Lock, Plus, RefreshCw, AlertCircle,
   Cpu, FolderPlus, PackagePlus,
-  FileCheck, CreditCard, Home, LayoutDashboard
+  FileCheck, CreditCard, Home, LayoutDashboard, Eye
 } from 'lucide-react';
 
 const ADMIN_EMAIL = import.meta.env.VITE_FIREBASE_ADMIN_EMAIL || 'admin@example.com';
+const hasFirebaseConfig = Boolean(
+  import.meta.env.VITE_FIREBASE_API_KEY &&
+  import.meta.env.VITE_FIREBASE_AUTH_DOMAIN &&
+  import.meta.env.VITE_FIREBASE_PROJECT_ID
+);
+
+/** Returns the fictional records used to explore the portal without connecting to Firebase. */
+const createDemoProject = () => ({
+  id: 'demo-project',
+  name: 'Portal de inventario',
+  orgName: 'Empresa de ejemplo',
+  status: 'En Desarrollo',
+  overallProgress: 75,
+  milestones: [
+    { id: 'demo-m1', title: 'Diseño de la solución', progress: 100, date: 'Completado' },
+    { id: 'demo-m2', title: 'Implementación de módulos', progress: 100, date: 'Completado' },
+    { id: 'demo-m3', title: 'Pruebas y entrega', progress: 25, date: 'En curso' }
+  ],
+  releases: [
+    {
+      id: 'demo-release-1',
+      version: 'v1.0.0-demo',
+      date: 'Fecha de ejemplo',
+      platform: 'Web (URL)',
+      size: 'Versión de muestra',
+      sha256: 'Hash de ejemplo',
+      downloadUrl: '#',
+      approved: false,
+      changelog: 'Primera versión de demostración'
+    }
+  ],
+  license: {
+    key: 'DEMO-PORTAL-0001',
+    plan: 'Plan de demostración',
+    maxNodes: 3,
+    nodes: [
+      { hwid: 'DEMO-DEVICE-01', alias: 'Equipo de ejemplo', lastSync: 'Hoy' }
+    ]
+  },
+  documents: [
+    { id: 'demo-doc-1', title: 'Guía de inicio', type: 'Guía', url: '#', date: 'Fecha de ejemplo' },
+    { id: 'demo-doc-2', title: 'Resumen del proyecto', type: 'Informe', url: '#', date: 'Fecha de ejemplo' }
+  ],
+  paymentMethods: [
+    { type: 'Método de pago de ejemplo', details: 'Datos ficticios; no realizar pagos.' }
+  ],
+  reportedPayments: [],
+  tickets: [
+    {
+      id: 'TKT-001',
+      title: 'Consultar el estado de un entregable',
+      description: 'Solicitud ficticia para mostrar el flujo de soporte.',
+      priority: 'Media',
+      status: 'En Revisión',
+      createdAt: 'Fecha de ejemplo'
+    }
+  ],
+  invoices: [
+    { id: 'INV-001', concept: 'Servicio de ejemplo', amount: '$0.00', date: 'Fecha de ejemplo', status: 'Pendiente' }
+  ],
+  timeline: [
+    { id: 'demo-event-1', text: 'Proyecto de demostración iniciado', date: 'Hoy', type: 'info' }
+  ]
+});
 
 /** Coordina la autenticación, los datos de proyectos y las vistas del portal. */
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [isGuest, setIsGuest] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState('');
@@ -73,7 +138,50 @@ export default function App() {
   const isAdmin = user?.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
   const selectedProject = projects.find(p => p.id === selectedProjectId) || projects[0] || null;
 
+  /** Keeps guest changes in memory while sending authenticated changes to Firestore. */
+  const saveProjectChanges = async (changes: Record<string, any>) => {
+    if (!selectedProject) return;
+
+    if (isGuest) {
+      setProjects((current) => current.map((project) => {
+        if (project.id !== selectedProject.id) return project;
+
+        const updatedProject = { ...project };
+        Object.entries(changes).forEach(([key, value]) => {
+          if (key.includes('.')) {
+            const [parent, child] = key.split('.');
+            updatedProject[parent] = { ...updatedProject[parent], [child]: value };
+          } else {
+            updatedProject[key] = value;
+          }
+        });
+        return updatedProject;
+      }));
+      return;
+    }
+
+    await updateDoc(doc(db, 'projects', selectedProject.id), changes);
+  };
+
+  /** Leaves guest mode without sending any data to Firebase. */
+  const handleSignOut = async () => {
+    if (isGuest) {
+      setIsGuest(false);
+      setProjects([]);
+      setSelectedProjectId(null);
+      setActiveTab('home');
+      return;
+    }
+
+    await signOut(auth);
+  };
+
   useEffect(() => {
+    if (!hasFirebaseConfig) {
+      setAuthLoading(false);
+      return;
+    }
+
     const unsub = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
       setAuthLoading(false);
@@ -85,6 +193,14 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (isGuest) {
+      const demoProject = createDemoProject();
+      setProjects([demoProject]);
+      setSelectedProjectId(demoProject.id);
+      setActiveTab('overview');
+      return;
+    }
+
     if (!user) {
       setProjects([]);
       setSelectedProjectId(null);
@@ -107,12 +223,17 @@ export default function App() {
     });
 
     return () => unsub();
-  }, [user]);
+  }, [user, isGuest]);
 
   /** Autentica al usuario y muestra un mensaje si Firebase rechaza sus credenciales. */
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError('');
+    if (!hasFirebaseConfig) {
+      setLoginError('Configura Firebase para iniciar sesión. También puedes explorar la demo como invitado.');
+      return;
+    }
+
     try {
       await signInWithEmailAndPassword(auth, email.trim(), password);
     } catch {
@@ -165,7 +286,7 @@ export default function App() {
   /** Carga registros ficticios en el proyecto seleccionado para recorrer la interfaz. */
   const initializeFullProjectData = async () => {
     if (!selectedProject) return;
-    await updateDoc(doc(db, 'projects', selectedProject.id), {
+    await saveProjectChanges({
       orgName: selectedProject.orgName || "Empresa de ejemplo",
       milestones: [
         { id: "m1", title: "Diseño de la solución", progress: 100, date: "Completado" },
@@ -212,7 +333,7 @@ export default function App() {
   /** Actualiza el estado del proyecto si el usuario tiene el rol de administrador. */
   const handleUpdateProjectStatus = async (newStatus: string) => {
     if (!selectedProject || !isAdmin) return;
-    await updateDoc(doc(db, 'projects', selectedProject.id), { status: newStatus });
+    await saveProjectChanges({ status: newStatus });
   };
 
   /** Agrega un hito, recalcula el avance general y registra el cambio en la actividad. */
@@ -229,7 +350,7 @@ export default function App() {
     const timeline = selectedProject.timeline || [];
     const newTimelineItem = { id: `t_${Date.now()}`, text: `Nuevo hito agregado: ${newMilestoneTitle}`, date: new Date().toLocaleDateString(), type: 'info' };
 
-    await updateDoc(doc(db, 'projects', selectedProject.id), {
+    await saveProjectChanges({
       milestones: updated,
       overallProgress: totalProgress,
       timeline: [newTimelineItem, ...timeline]
@@ -251,7 +372,7 @@ export default function App() {
     const milestoneObj = updated.find((m: any) => m.id === mId);
     const newTimelineItem = { id: `t_${Date.now()}`, text: `Hito "${milestoneObj?.title}" actualizado a ${progress}%`, date: new Date().toLocaleDateString(), type: 'success' };
 
-    await updateDoc(doc(db, 'projects', selectedProject.id), {
+    await saveProjectChanges({
       milestones: updated,
       overallProgress: totalProgress,
       timeline: [newTimelineItem, ...timeline]
@@ -278,7 +399,7 @@ export default function App() {
     const timeline = selectedProject.timeline || [];
     const newTimelineItem = { id: `t_${Date.now()}`, text: `Nuevo entregable publicado: ${newRelease.version} (${newRelease.platform})`, date: new Date().toLocaleDateString(), type: 'success' };
 
-    await updateDoc(doc(db, 'projects', selectedProject.id), {
+    await saveProjectChanges({
       releases: [created, ...current],
       timeline: [newTimelineItem, ...timeline]
     });
@@ -287,15 +408,15 @@ export default function App() {
 
   /** Aprueba un entregable con el usuario actual y registra la aprobación. */
   const handleApproveRelease = async (releaseId: string) => {
-    if (!selectedProject || !user) return;
+    if (!selectedProject || (!user && !isGuest)) return;
     const updated = (selectedProject.releases || []).map((r: any) =>
-      r.id === releaseId ? { ...r, approved: true, approvedBy: user.email, approvedAt: new Date().toLocaleDateString() } : r
+      r.id === releaseId ? { ...r, approved: true, approvedBy: user?.email || 'Invitado de demostración', approvedAt: new Date().toLocaleDateString() } : r
     );
     const timeline = selectedProject.timeline || [];
     const relObj = updated.find((r: any) => r.id === releaseId);
     const newTimelineItem = { id: `t_${Date.now()}`, text: `Entregable ${relObj?.version} aprobado`, date: new Date().toLocaleDateString(), type: 'success' };
 
-    await updateDoc(doc(db, 'projects', selectedProject.id), {
+    await saveProjectChanges({
       releases: updated,
       timeline: [newTimelineItem, ...timeline]
     });
@@ -305,7 +426,7 @@ export default function App() {
   const handleRevokeNode = async (hwid: string) => {
     if (!selectedProject?.license) return;
     const updatedNodes = (selectedProject.license.nodes || []).filter((n: any) => n.hwid !== hwid);
-    await updateDoc(doc(db, 'projects', selectedProject.id), { 'license.nodes': updatedNodes });
+    await saveProjectChanges({ 'license.nodes': updatedNodes });
   };
 
   /** Crea una solicitud de soporte y la registra en la actividad del proyecto. */
@@ -325,7 +446,7 @@ export default function App() {
     const timeline = selectedProject.timeline || [];
     const newTimelineItem = { id: `t_${Date.now()}`, text: `Nuevo ticket abierto: ${newTicketTitle}`, date: new Date().toLocaleDateString(), type: 'info' };
 
-    await updateDoc(doc(db, 'projects', selectedProject.id), {
+    await saveProjectChanges({
       tickets: [newTk, ...current],
       timeline: [newTimelineItem, ...timeline]
     });
@@ -342,7 +463,7 @@ export default function App() {
     const tkObj = updated.find((t: any) => t.id === tkId);
     const newTimelineItem = { id: `t_${Date.now()}`, text: `Ticket ${tkObj?.id} marcado como "${newStatus}"`, date: new Date().toLocaleDateString(), type: 'success' };
 
-    await updateDoc(doc(db, 'projects', selectedProject.id), {
+    await saveProjectChanges({
       tickets: updated,
       timeline: [newTimelineItem, ...timeline]
     });
@@ -360,7 +481,7 @@ export default function App() {
       date: newInvoice.date || new Date().toLocaleDateString(),
       status: 'Pendiente'
     };
-    await updateDoc(doc(db, 'projects', selectedProject.id), { invoices: [created, ...current] });
+    await saveProjectChanges({ invoices: [created, ...current] });
     setNewInvoice({ concept: '', amount: '', date: '' });
   };
 
@@ -370,7 +491,7 @@ export default function App() {
     const updated = (selectedProject.invoices || []).map((i: any) =>
       i.id === invId ? { ...i, status: i.status === 'Pagado' ? 'Pendiente' : 'Pagado' } : i
     );
-    await updateDoc(doc(db, 'projects', selectedProject.id), { invoices: updated });
+    await saveProjectChanges({ invoices: updated });
   };
 
   /** Agrega un documento y notifica a los participantes mediante la actividad. */
@@ -389,7 +510,7 @@ export default function App() {
     const timeline = selectedProject.timeline || [];
     const newTimelineItem = { id: `t_${Date.now()}`, text: `Documento adjuntado: ${newDocData.title} (${newDocData.type})`, date: new Date().toLocaleDateString(), type: 'success' };
 
-    await updateDoc(doc(db, 'projects', selectedProject.id), {
+    await saveProjectChanges({
       documents: [newDoc, ...current],
       timeline: [newTimelineItem, ...timeline]
     });
@@ -399,7 +520,7 @@ export default function App() {
   /** Guarda un reporte para revisión; los datos de pago de la demo no son reales. */
   const handleReportPayment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!paymentReport.reference.trim() || !selectedProject || !user) return;
+    if (!paymentReport.reference.trim() || !selectedProject || (!user && !isGuest)) return;
     const current = selectedProject.reportedPayments || [];
     const report = {
       id: `PAY-${Date.now().toString().slice(-4)}`,
@@ -407,11 +528,11 @@ export default function App() {
       method: paymentReport.method,
       amount: paymentReport.amount ? (paymentReport.amount.startsWith('$') ? paymentReport.amount : `$${paymentReport.amount}`) : 'Por verificar',
       notes: paymentReport.notes,
-      reportedBy: user.email,
+      reportedBy: user?.email || 'Invitado de demostración',
       date: new Date().toLocaleDateString(),
       status: 'En Revisión'
     };
-    await updateDoc(doc(db, 'projects', selectedProject.id), { reportedPayments: [report, ...current] });
+    await saveProjectChanges({ reportedPayments: [report, ...current] });
     setPaymentReport({ reference: '', method: 'Transferencia de ejemplo', amount: '', notes: '' });
   };
 
@@ -421,7 +542,7 @@ export default function App() {
     const updated = (selectedProject.reportedPayments || []).map((p: any) =>
       p.id === payId ? { ...p, status: newStatus } : p
     );
-    await updateDoc(doc(db, 'projects', selectedProject.id), { reportedPayments: updated });
+    await saveProjectChanges({ reportedPayments: updated });
   };
 
   if (authLoading) {
@@ -433,7 +554,7 @@ export default function App() {
     );
   }
 
-  if (!user) {
+  if (!user && !isGuest) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4 text-slate-100">
         <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-2xl">
@@ -486,6 +607,30 @@ export default function App() {
               Ingresar al Portal Seguro
             </button>
           </form>
+
+          <div className="my-5 flex items-center gap-3 text-[11px] text-slate-500">
+            <div className="h-px flex-1 bg-slate-800" />
+            <span>o explora la demo</span>
+            <div className="h-px flex-1 bg-slate-800" />
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setLoginError('');
+              const demoProject = createDemoProject();
+              setProjects([demoProject]);
+              setSelectedProjectId(demoProject.id);
+              setActiveTab('overview');
+              setIsGuest(true);
+            }}
+            className="w-full border border-slate-700 hover:border-indigo-500 text-slate-200 hover:text-white font-medium py-2.5 rounded-lg text-sm transition flex items-center justify-center gap-2"
+          >
+            <Eye className="w-4 h-4" />
+            Explorar como invitado
+          </button>
+          <p className="text-center text-[11px] text-slate-500 mt-3">
+            Datos ficticios. Tus cambios solo duran esta sesión.
+          </p>
         </div>
       </div>
     );
@@ -500,11 +645,11 @@ export default function App() {
           <div>
             <div className="flex items-center gap-2">
               <span className="font-bold text-sm">Portal de Proyectos</span>
-              <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${isAdmin ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'}`}>
-                {isAdmin ? `Modo Administrador Total (${projects.length} proyectos)` : 'Portal Cliente Verificado'}
+              <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${isAdmin ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' : isGuest ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30' : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'}`}>
+                {isAdmin ? `Modo Administrador Total (${projects.length} proyectos)` : isGuest ? 'Modo invitado · Demo' : 'Portal Cliente Verificado'}
               </span>
             </div>
-            <p className="text-xs text-slate-400">{user.email}</p>
+            <p className="text-xs text-slate-400">{isGuest ? 'Datos de ejemplo · cambios temporales' : user?.email}</p>
           </div>
         </div>
 
@@ -519,7 +664,7 @@ export default function App() {
             </button>
           )}
           <button
-            onClick={() => signOut(auth)}
+            onClick={handleSignOut}
             className="text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 px-3 py-2 rounded-lg flex items-center gap-1.5 transition"
           >
             <LogOut className="w-3.5 h-3.5" />
